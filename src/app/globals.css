@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0f;
+  --foreground: #ededed;
+  --accent: #6366f1;
+  --accent-light: #818cf8;
+  --surface: #111118;
+  --surface-light: #1a1a24;
+  --border: #2a2a3a;
+  --muted: #71717a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-light: var(--accent-light);
+  --color-surface: var(--surface);
+  --color-surface-light: var(--surface-light);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), 'SF Mono', 'Consolas', monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow effect for cards on hover */
+.card-glow {
+  position: relative;
+  transition: all 0.3s ease;
+}
+.card-glow:hover {
+  border-color: #6366f140;
+  box-shadow: 0 0 30px #6366f115;
+}
+
+/* Smooth scroll */
+html {
+  scroll-behavior: smooth;
+}
