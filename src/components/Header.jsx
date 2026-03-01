@@ -36,7 +36,7 @@ export default function Header() {
             GitHub
           </a>
           <a
-            href="https://abhilash38.gumroad.com/l/jdenr"
+            href="https://abhilash38.gumroad.com/l/jdenr?wanted=true"
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-light"
@@ -65,7 +65,7 @@ export default function Header() {
             <a href="#how-it-works" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>How It Works</a>
             <a href="#demo" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>Live Demo</a>
             <a href="https://github.com/adaslal/sanity-suite" target="_blank" rel="noopener noreferrer" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>GitHub</a>
-            <a href="https://abhilash38.gumroad.com/l/jdenr" target="_blank" rel="noopener noreferrer" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white text-center" onClick={() => setMobileOpen(false)}>Get It — $29</a>
+            <a href="https://abhilash38.gumroad.com/l/jdenr?wanted=true" target="_blank" rel="noopener noreferrer" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white text-center" onClick={() => setMobileOpen(false)}>Get It — $29</a>
           </div>
         </div>
       )}

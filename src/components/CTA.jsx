@@ -21,7 +21,7 @@ export default function CTA() {
 
             <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <a
-                href="https://abhilash38.gumroad.com/l/jdenr"
+                href="https://abhilash38.gumroad.com/l/jdenr?wanted=true"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-lg bg-accent px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-accent/25 transition-all hover:bg-accent-light"
