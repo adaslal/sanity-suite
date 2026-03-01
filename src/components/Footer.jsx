@@ -23,7 +23,7 @@ export default function Footer() {
               Demo
             </a>
             <a
-              href="https://github.com"
+              href="https://github.com/adaslal/sanity-suite"
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-muted hover:text-foreground transition-colors"

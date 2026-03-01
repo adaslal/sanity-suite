@@ -24,6 +24,31 @@ export const metadata = {
     "Logic Audit",
     "LWC",
   ],
+  openGraph: {
+    title: "Sanity Suite — DevOps Toolkit for Salesforce Flow Governance",
+    description:
+      "Audit Flows in 2ms. Patch Permission Sets surgically. Extract deterministic logic hashes. 100% client-side — no AI, no server, no data leaves your org.",
+    url: "https://sanity-suite.vercel.app",
+    siteName: "Sanity Suite",
+    type: "website",
+    locale: "en_US",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "Sanity Suite — Salesforce Flow Governance Toolkit",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Sanity Suite — DevOps Toolkit for Salesforce Flow Governance",
+    description:
+      "Audit Flows in 2ms. Patch Permission Sets surgically. 100% client-side — no AI, no server.",
+    images: ["/og-image.png"],
+  },
+  metadataBase: new URL("https://sanity-suite.vercel.app"),
 };
 
 export default function RootLayout({ children }) {
