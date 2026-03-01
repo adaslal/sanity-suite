@@ -35,22 +35,24 @@ export default function Hero() {
         {/* CTA buttons */}
         <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
           <a
-            href="#demo"
+            href="https://abhilash38.gumroad.com/l/jdenr"
+            target="_blank"
+            rel="noopener noreferrer"
             className="rounded-lg bg-accent px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-accent/25 transition-all hover:bg-accent-light hover:shadow-accent/40"
           >
-            Try the Live Demo
+            Get It — $29
           </a>
           <a
-            href="#features"
+            href="#demo"
             className="rounded-lg border border-border px-8 py-3.5 text-base font-semibold text-foreground transition-colors hover:border-accent/40 hover:bg-surface"
           >
-            See What It Does
+            Try the Live Demo
           </a>
         </div>
 
         {/* Social proof hint */}
         <p className="mt-12 text-sm text-muted">
-          Built by a Salesforce Developer, for Salesforce teams.
+          Built by a Salesforce Developer, for Salesforce teams. Deploy in under 5 minutes.
         </p>
       </div>
     </section>
