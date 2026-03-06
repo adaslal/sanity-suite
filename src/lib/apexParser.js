@@ -93,11 +93,11 @@ const NODE_TYPES = {
   START:    { shape: (id, label) => `${id}(["${label}"])`,      style: 'startNode' },
   END:      { shape: (id, label) => `${id}(["${label}"])`,      style: 'endNode' },
   DECISION: { shape: (id, label) => `${id}{"${label}"}`,       style: 'decisionNode' },
-  ERROR:    { shape: (id, label) => `${id}[/"${label}"/]`,     style: 'errorNode' },
-  DML:      { shape: (id, label) => `${id}[("${label}")]`,     style: 'dmlNode' },
-  QUERY:    { shape: (id, label) => `${id}[("${label}")]`,     style: 'queryNode' },
-  LOOP:     { shape: (id, label) => `${id}{{{"${label}"}}}`,   style: 'loopNode' },
-  CALL:     { shape: (id, label) => `${id}>"${label}"]`,       style: 'callNode' },
+  ERROR:    { shape: (id, label) => `${id}(["${label}"])`,      style: 'errorNode' },
+  DML:      { shape: (id, label) => `${id}(["${label}"])`,      style: 'dmlNode' },
+  QUERY:    { shape: (id, label) => `${id}(["${label}"])`,      style: 'queryNode' },
+  LOOP:     { shape: (id, label) => `${id}(["${label}"])`,      style: 'loopNode' },
+  CALL:     { shape: (id, label) => `${id}["${label}"]`,        style: 'callNode' },
   EVENT:    { shape: (id, label) => `${id}(("${label}"))`,     style: 'eventNode' },
   ACTION:   { shape: (id, label) => `${id}["${label}"]`,       style: 'actionNode' },
 };
@@ -164,7 +164,7 @@ export function parseApexToMermaid(apexCode) {
   const lines = apexCode.split('\n');
   const nodes = [];
   const edges = [];
-  const styles = new Set();
+  const styleGroups = {};   // styleName -> [nodeId, nodeId, ...]
   let nodeCounter = 0;
 
   function nextId(prefix = 'n') {
@@ -176,15 +176,19 @@ export function parseApexToMermaid(apexCode) {
       .replace(/"/g, "'")
       .replace(/[<>]/g, '')
       .replace(/\|/g, '/')
+      .replace(/[{}[\]()]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 60);
+      .slice(0, 55);
   }
 
   function addNode(type, label) {
     const id = nextId();
     const nodeType = NODE_TYPES[type] || NODE_TYPES.ACTION;
     nodes.push(nodeType.shape(id, sanitize(label)));
-    styles.add(nodeType.style);
+    const styleName = nodeType.style;
+    if (!styleGroups[styleName]) styleGroups[styleName] = [];
+    styleGroups[styleName].push(id);
     return id;
   }
 
@@ -387,7 +391,7 @@ export function parseApexToMermaid(apexCode) {
   edges.forEach(e => output.push(`  ${e}`));
   output.push('');
 
-  // Style definitions
+  // Style definitions + apply to nodes
   const styleMap = {
     classNode:    'fill:#312e81,stroke:#6366f1,stroke-width:2px,color:#e0e7ff',
     methodNode:   'fill:#1e3a5f,stroke:#3b82f6,stroke-width:2px,color:#bfdbfe',
@@ -403,31 +407,19 @@ export function parseApexToMermaid(apexCode) {
     actionNode:   'fill:#1e293b,stroke:#475569,stroke-width:1px,color:#cbd5e1',
   };
 
-  styles.forEach(styleName => {
+  Object.entries(styleGroups).forEach(([styleName, nodeIds]) => {
     if (styleMap[styleName]) {
-      // Collect all node IDs that use this style
-      const prefix = styleName.replace('Node', '');
       output.push(`  classDef ${styleName} ${styleMap[styleName]}`);
     }
   });
-
-  // Apply styles to nodes based on their type
   output.push('');
-  let nodeIdx = 0;
-  const nodeIdList = [];
-  nodes.forEach(() => {
-    nodeIdx++;
-    nodeIdList.push(`n${nodeIdx}`);
+
+  // Apply class styles to specific nodes
+  Object.entries(styleGroups).forEach(([styleName, nodeIds]) => {
+    if (styleMap[styleName] && nodeIds.length > 0) {
+      output.push(`  class ${nodeIds.join(',')} ${styleName}`);
+    }
   });
-
-  // Map node IDs to their styles by re-walking the generation order
-  nodeIdx = 0;
-  const styleAssignments = {};
-
-  // Re-derive style assignments: we track each addNode call's type
-  // Since we can't easily retroactively map, use a simpler approach:
-  // Apply class styles based on node content patterns
-  output.push('');
 
   return output.join('\n');
 }
