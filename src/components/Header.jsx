@@ -7,7 +7,7 @@ export default function Header() {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <a href="#" className="flex items-center gap-2">
+        <a href="/" className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent">
             <span className="text-sm font-bold text-white">S</span>
           </div>
@@ -26,6 +26,12 @@ export default function Header() {
           </a>
           <a href="#demo" className="text-sm text-muted hover:text-foreground transition-colors">
             Live Demo
+          </a>
+          <a
+            href="/tools/apex-visualizer"
+            className="text-sm font-medium text-accent hover:text-accent-light transition-colors"
+          >
+            Apex Visualizer
           </a>
           <a
             href="https://github.com/adaslal/sanity-suite"
@@ -64,6 +70,7 @@ export default function Header() {
             <a href="#features" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>Features</a>
             <a href="#how-it-works" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>How It Works</a>
             <a href="#demo" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>Live Demo</a>
+            <a href="/tools/apex-visualizer" className="text-sm font-medium text-accent hover:text-accent-light" onClick={() => setMobileOpen(false)}>Apex Visualizer</a>
             <a href="https://github.com/adaslal/sanity-suite" target="_blank" rel="noopener noreferrer" className="text-sm text-muted hover:text-foreground" onClick={() => setMobileOpen(false)}>GitHub</a>
             <a href="https://abhilash38.gumroad.com/l/jdenr?wanted=true" target="_blank" rel="noopener noreferrer" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white text-center" onClick={() => setMobileOpen(false)}>Get It — $29</a>
           </div>
