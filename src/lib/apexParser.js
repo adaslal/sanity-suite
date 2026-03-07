@@ -1,24 +1,16 @@
 /**
- * ApexParser v5 — Collaborative Business Process Map
+ * ApexParser v6 — Business Logic IDE
  *
- * Philosophy: Give the developer a 90% accurate business-language map,
- * then let them refine the last 10%.
+ * Architecture: Step Array Model
+ *   parseApexToSteps(code)  → Step[]   (structured data)
+ *   stepsToMermaid(steps)   → string   (Mermaid diagram)
+ *   parseApexToMermaid()    → string   (convenience wrapper — backward compat)
  *
  * Three accuracy layers:
  *   1. @intent COMMENTS (developer-led override)
- *      // @intent Create Provisioning Case for the Order
- *      insert provisioningCases;
- *      → The @intent label wins over any machine guess.
- *
  *   2. OBJECT DICTIONARY (system-led semantic mapping)
- *      Maps standard + common custom sObjects to business-domain verbs.
- *      Asset → "Provision Asset", Case → "Open Support Case", etc.
- *
- *   3. VARIABLE RESOLUTION (existing v4 logic)
- *      Resolves List<Invoice__c> invoicesToInsert → "Create Invoice"
- *
- *   4. USER REFINEMENT (collaborative — handled in the UI component)
- *      Users can click any node and rename it before downloading.
+ *   3. VARIABLE RESOLUTION (regex-based type inference)
+ *   4. USER REFINEMENT (mid-flow insertion, rename, hide — handled in UI)
  *
  * 100% client-side. No dependencies.
  */
@@ -93,11 +85,8 @@ export const SAMPLE_APEX = `public with sharing class OpportunityCloseHandler {
 
 
 // ─── sObject → Business Domain Dictionary ───────────────────────────────────
-// Maps sObject API names to a { domain, defaultVerb } that produces
-// more meaningful labels than raw "Create [Object]".
 
 const OBJECT_DICTIONARY = {
-  // ── Standard Objects ──
   Account:            { domain: 'Account',                verb: 'Manage' },
   Contact:            { domain: 'Contact',                verb: 'Manage' },
   Lead:               { domain: 'Lead',                   verb: 'Process' },
@@ -121,12 +110,8 @@ const OBJECT_DICTIONARY = {
   FeedItem:           { domain: 'Chatter Post',           verb: 'Post' },
   EmailMessage:       { domain: 'Email',                  verb: 'Send' },
   CaseComment:        { domain: 'Case Comment',           verb: 'Add' },
-  // ── Common Custom Patterns ──
-  // The parser will also check for partial matches like "Invoice", "Payment", etc.
 };
 
-// Partial-match patterns: if the sObject name contains one of these,
-// map it to a business domain (for custom objects like Invoice__c, Payment__c, etc.)
 const OBJECT_PATTERNS = [
   { pattern: /invoice/i,        domain: 'Invoice',            dmlVerbs: { insert: 'Generate', update: 'Update', delete: 'Void' } },
   { pattern: /payment/i,        domain: 'Payment',            dmlVerbs: { insert: 'Process', update: 'Update', delete: 'Refund' } },
@@ -148,15 +133,10 @@ const OBJECT_PATTERNS = [
   { pattern: /integration/i,    domain: 'Integration Record', dmlVerbs: { insert: 'Queue', update: 'Update', delete: 'Remove' } },
 ];
 
-/**
- * Resolve an sObject name + DML verb → business-language label.
- * Uses the dictionary first, then pattern matching, then falls back to humanize.
- */
 function businessLabel(objName, dmlVerb) {
   const verb = dmlVerb.toLowerCase();
   const defaultVerbs = { insert: 'Create', update: 'Update', delete: 'Delete', upsert: 'Upsert' };
 
-  // 1. Exact dictionary match
   const dictEntry = OBJECT_DICTIONARY[objName];
   if (dictEntry) {
     const v = (verb === 'insert' && dictEntry.verb !== 'Manage')
@@ -165,7 +145,6 @@ function businessLabel(objName, dmlVerb) {
     return `${v} ${dictEntry.domain}`;
   }
 
-  // 2. Pattern match (for custom objects)
   const cleaned = cleanObject(objName);
   for (const pm of OBJECT_PATTERNS) {
     if (pm.pattern.test(objName) || pm.pattern.test(cleaned)) {
@@ -174,7 +153,6 @@ function businessLabel(objName, dmlVerb) {
     }
   }
 
-  // 3. Fallback: humanized
   return `${defaultVerbs[verb] || dmlVerb} ${cleaned}`;
 }
 
@@ -197,13 +175,11 @@ function humanize(name) {
     .trim();
 }
 
-/** Clean an sObject name for display */
 function cleanObject(name) {
   if (!name) return 'Records';
   return humanize(name).replace(/ Event$/, '');
 }
 
-/** Strip common method prefixes to find the core intent */
 function stripMethodPrefix(name) {
   return name
     .replace(/^(handle|process|execute|run|do|perform|on|before|after)/i, '')
@@ -238,12 +214,6 @@ function extractMethodBody(code, startIdx) {
 
 // ─── @intent comment parser ─────────────────────────────────────────────────
 
-/**
- * Extracts all `// @intent <label>` comments from a code block.
- * Returns a Map<lineOffset, intentLabel> — the line offset is the char index
- * where the @intent comment appears, so we can position it correctly in the
- * milestone list.
- */
 function extractIntents(body) {
   const intents = [];
   const re = /\/\/\s*@intent\s+(.+)/gi;
@@ -291,27 +261,22 @@ function extractMilestones(methodName, body, params) {
   const milestones = [];
   const seen = new Set();
 
-  // ── Layer 1: @intent comments (highest priority) ──
   const intents = extractIntents(body);
 
-  // ── Build type map: variableName → sObject type ──
   const typeMap = {};
 
-  // Parse method parameters first (e.g., "List<Account> accounts, Map<Id, Order> orderMap")
   if (params) {
     const paramListRe = /\bList<(\w+(?:__\w+)?)>\s+(\w+)/g;
     let pm;
     while ((pm = paramListRe.exec(params)) !== null) typeMap[pm[2]] = pm[1];
     const paramMapRe = /\bMap<\w+,\s*(\w+(?:__\w+)?)>\s+(\w+)/g;
     while ((pm = paramMapRe.exec(params)) !== null) typeMap[pm[2]] = pm[1];
-    // Single object params: Type varName
     const paramSingleRe = /\b(\w+(?:__\w+)?)\s+(\w+)\s*(?:,|$)/g;
     while ((pm = paramSingleRe.exec(params)) !== null) {
       if (!typeMap[pm[2]] && /^[A-Z]/.test(pm[1])) typeMap[pm[2]] = pm[1];
     }
   }
 
-  // Then parse body declarations (these override params if duplicated)
   const listDeclRe = /\bList<(\w+(?:__\w+)?)>\s+(\w+)\b/g;
   let ld;
   while ((ld = listDeclRe.exec(body)) !== null) typeMap[ld[2]] = ld[1];
@@ -324,10 +289,8 @@ function extractMilestones(methodName, body, params) {
   let sd;
   while ((sd = singleDeclRe.exec(body)) !== null) typeMap[sd[2]] = sd[1];
 
-  // ── Collect machine-detected milestones ──
   const machineMilestones = [];
 
-  // DML operations
   const dmlRe = /\b(insert|update|delete|upsert)\s+(\w+)/gi;
   let dm;
   while ((dm = dmlRe.exec(body)) !== null) {
@@ -335,8 +298,6 @@ function extractMilestones(methodName, body, params) {
     const varName = dm[2];
     const declaredType = typeMap[varName];
     const objName = declaredType || varName;
-
-    // Use businessLabel (dictionary + pattern + fallback)
     const label = businessLabel(objName, verb);
     if (!seen.has(label)) {
       seen.add(label);
@@ -344,7 +305,6 @@ function extractMilestones(methodName, body, params) {
     }
   }
 
-  // Database.* operations
   const dbRe = new RegExp(RE.databaseOp.source, 'gi');
   let dbm;
   while ((dbm = dbRe.exec(body)) !== null) {
@@ -359,7 +319,6 @@ function extractMilestones(methodName, body, params) {
     }
   }
 
-  // Platform Events
   const evtRe = new RegExp(RE.eventPublish.source, 'g');
   let ev;
   while ((ev = evtRe.exec(body)) !== null) {
@@ -376,7 +335,6 @@ function extractMilestones(methodName, body, params) {
     }
   }
 
-  // External service calls
   const callRe = new RegExp(RE.methodCall.source, 'g');
   let cm;
   const seenCalls = new Set();
@@ -385,22 +343,16 @@ function extractMilestones(methodName, body, params) {
     if (FRAMEWORK_OBJECTS.has(obj)) continue;
     if (COLLECTION_METHODS.has(meth)) continue;
     if (/^[a-z]/.test(obj)) continue;
-
     const key = `${obj}.${meth}`;
     if (seenCalls.has(key)) continue;
     seenCalls.add(key);
-
     machineMilestones.push({ label: humanize(meth), type: 'call', pos: cm.index });
   }
 
-  // ── Merge: @intent overrides machine milestones in the same vicinity ──
-  // An @intent within ~200 chars before a machine milestone replaces it.
   const merged = [];
-  const usedIntents = new Set();
   const usedMachine = new Set();
 
   for (const intent of intents) {
-    // Find the closest machine milestone AFTER this intent (within 200 chars)
     let closestIdx = -1;
     let closestDist = Infinity;
     for (let i = 0; i < machineMilestones.length; i++) {
@@ -411,35 +363,27 @@ function extractMilestones(methodName, body, params) {
       }
     }
     if (closestIdx >= 0) {
-      // @intent replaces the machine milestone
       usedMachine.add(closestIdx);
-      usedIntents.add(intent);
       merged.push({ label: intent.label, type: 'intent', pos: intent.pos });
     } else {
-      // Standalone @intent (no nearby machine milestone)
       merged.push({ label: intent.label, type: 'intent', pos: intent.pos });
-      usedIntents.add(intent);
     }
   }
 
-  // Add remaining machine milestones that weren't overridden
   for (let i = 0; i < machineMilestones.length; i++) {
     if (!usedMachine.has(i)) {
       merged.push(machineMilestones[i]);
     }
   }
 
-  // Sort by position
   merged.sort((a, b) => a.pos - b.pos);
 
-  // Deduplicate adjacent identical labels
   const deduped = [];
   for (const m of merged) {
     if (deduped.length > 0 && deduped[deduped.length - 1].label === m.label) continue;
     deduped.push(m);
   }
 
-  // Fallback: method name
   if (deduped.length === 0) {
     const core = stripMethodPrefix(humanize(methodName));
     deduped.push({ label: core || humanize(methodName), type: 'fallback', pos: 0 });
@@ -449,52 +393,49 @@ function extractMilestones(methodName, body, params) {
 }
 
 
-// ─── Main parser: Business Process Map ───────────────────────────────────────
+// ─── Step Array Model ────────────────────────────────────────────────────────
+//
+// Each Step = {
+//   id:       string     — unique ID ('n1', 'n2', ... or 'c1', 'c2' for custom)
+//   label:    string     — display text
+//   type:     string     — 'class'|'dml'|'intent'|'event'|'call'|'fallback'|'custom'|'end'
+//   shape:    string     — Mermaid shape: 'subrect'|'stadium'|'hexagon'|'rounded'|'rect'|'circle'
+//   style:    string     — CSS class: 'classNode'|'dmlNode'|'intentNode'|etc.
+//   source:   string     — 'machine'|'intent'|'custom'
+//   editable: boolean    — whether users can rename/hide this step
+//   hidden:   boolean    — if true, excluded from Mermaid output
+// }
 
 /**
- * parseApexToMermaid(apexCode, overrides?, customSteps?)
+ * parseApexToSteps(apexCode)
  *
- * @param {string}  apexCode    — The Apex class source
- * @param {Object}  overrides   — Optional { nodeId: "New Label" | "__HIDDEN__" } map
- * @param {Array}   customSteps — Optional [{ label, type }] appended before Done
- * @returns {string} Mermaid diagram code
+ * Parses Apex source into a structured Step array.
+ * This is the foundation — the UI manipulates this array,
+ * then calls stepsToMermaid() to render.
+ *
+ * @param {string} apexCode — The Apex class source
+ * @returns {Array} Step objects
  */
-export function parseApexToMermaid(apexCode, overrides = {}, customSteps = []) {
-  if (!apexCode || !apexCode.trim()) return '';
+export function parseApexToSteps(apexCode) {
+  if (!apexCode || !apexCode.trim()) return [];
 
-  const out = [];
-  const styleGroups = {};
-  const nodeMap = {}; // nodeId → { label, type } for UI click-to-rename
-  let nid = 0;
+  const steps = [];
+  let nextId = 1;
 
-  function id() { return `n${++nid}`; }
-
-  function node(nodeId, shape, label, style) {
-    // Apply user override if exists
-    const finalLabel = overrides[nodeId] || label;
-    const s = safe(finalLabel);
-    const shapes = {
-      stadium:  `${nodeId}(["${s}"])`,
-      rect:     `${nodeId}["${s}"]`,
-      rounded:  `${nodeId}("${s}")`,
-      circle:   `${nodeId}(("${s}"))`,
-      hexagon:  `${nodeId}{{"${s}"}}`,
-      subrect:  `${nodeId}[["${s}"]]`,
-    };
-    out.push(`    ${shapes[shape] || shapes.rect}`);
-    if (!styleGroups[style]) styleGroups[style] = [];
-    styleGroups[style].push(nodeId);
-    nodeMap[nodeId] = { label: finalLabel, type: style };
-    return nodeId;
-  }
-
-  function edge(from, to) {
-    out.push(`    ${from} --> ${to}`);
-  }
-
-  // ── Extract class ──
   const classMatch = apexCode.match(RE.classDecl);
   const className = classMatch ? classMatch[1] : 'ApexClass';
+
+  // ── Title step ──
+  steps.push({
+    id: `n${nextId++}`,
+    label: humanize(className),
+    type: 'class',
+    shape: 'subrect',
+    style: 'classNode',
+    source: 'machine',
+    editable: false,
+    hidden: false,
+  });
 
   // ── Extract methods ──
   const methods = [];
@@ -508,130 +449,179 @@ export function parseApexToMermaid(apexCode, overrides = {}, customSteps = []) {
   }
 
   if (methods.length === 0) {
-    return `graph TD\n    n1[["${safe(humanize(className))}"]]\n    n2(["No business logic found"])\n    n1 --> n2\n  classDef classNode fill:#312e81,stroke:#6366f1,stroke-width:2px,color:#e0e7ff\n  class n1 classNode`;
-  }
+    steps.push({
+      id: `n${nextId++}`,
+      label: 'No business logic found',
+      type: 'fallback',
+      shape: 'stadium',
+      style: 'fallbackNode',
+      source: 'machine',
+      editable: false,
+      hidden: false,
+    });
+  } else {
+    for (const method of methods) {
+      const milestones = extractMilestones(method.name, method.body, method.params);
 
-  out.push('graph TD');
-  out.push('');
+      for (const ms of milestones) {
+        const style = ms.type === 'intent' ? 'intentNode' : ({
+          dml: 'dmlNode', event: 'eventNode', call: 'callNode', fallback: 'fallbackNode',
+        }[ms.type] || 'fallbackNode');
 
-  const titleId = id();
-  node(titleId, 'subrect', humanize(className), 'classNode');
-  out.push('');
+        const shape = ms.type === 'intent' ? 'stadium' : ({
+          dml: 'stadium', event: 'hexagon', call: 'rounded', fallback: 'rect',
+        }[ms.type] || 'rect');
 
-  let prevId = titleId;
-
-  methods.forEach((method) => {
-    const milestones = extractMilestones(method.name, method.body, method.params);
-
-    for (const ms of milestones) {
-      const nId = id();
-
-      // Skip hidden nodes (user removed this block)
-      if (overrides[nId] === '__HIDDEN__') continue;
-
-      // @intent milestones get a special style
-      const styleType = ms.type === 'intent' ? 'intentNode' : ({
-        dml: 'dmlNode',
-        event: 'eventNode',
-        call: 'callNode',
-        fallback: 'fallbackNode',
-      }[ms.type] || 'fallbackNode');
-
-      const shape = ms.type === 'intent' ? 'stadium' : ({
-        dml: 'stadium',
-        event: 'hexagon',
-        call: 'rounded',
-        fallback: 'rect',
-      }[ms.type] || 'rect');
-
-      node(nId, shape, ms.label, styleType);
-      edge(prevId, nId);
-      prevId = nId;
+        steps.push({
+          id: `n${nextId++}`,
+          label: ms.label,
+          type: ms.type,
+          shape,
+          style,
+          source: ms.type === 'intent' ? 'intent' : 'machine',
+          editable: true,
+          hidden: false,
+        });
+      }
     }
-  });
-
-  // ── Custom steps (user-added) ──
-  for (const step of customSteps) {
-    const csId = id();
-    const stepLabel = typeof step === 'string' ? step : (step && step.label ? step.label : 'Custom Step');
-    node(csId, 'rounded', stepLabel, 'customNode');
-    edge(prevId, csId);
-    prevId = csId;
   }
 
-  const endId = id();
-  node(endId, 'circle', 'Done', 'endNode');
-  edge(prevId, endId);
+  // ── End step ──
+  steps.push({
+    id: `n${nextId++}`,
+    label: 'Done',
+    type: 'end',
+    shape: 'circle',
+    style: 'endNode',
+    source: 'machine',
+    editable: false,
+    hidden: false,
+  });
 
-  // ── Styles ──
-  const styleMap = {
-    classNode:    'fill:#312e81,stroke:#6366f1,stroke-width:3px,color:#e0e7ff,font-weight:bold',
-    intentNode:   'fill:#065f46,stroke:#10b981,stroke-width:3px,color:#a7f3d0,font-weight:bold',
-    dmlNode:      'fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca,font-weight:bold',
-    eventNode:    'fill:#4a1d96,stroke:#8b5cf6,stroke-width:2px,color:#c4b5fd,font-weight:bold',
-    callNode:     'fill:#164e63,stroke:#06b6d4,stroke-width:2px,color:#a5f3fc',
-    fallbackNode: 'fill:#1e293b,stroke:#475569,stroke-width:2px,color:#cbd5e1',
-    customNode:   'fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#c7d2fe,stroke-dasharray:5 3',
-    endNode:      'fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#a7f3d0',
-  };
+  return steps;
+}
+
+
+// ─── Steps → Mermaid ─────────────────────────────────────────────────────────
+
+/** Style definitions shared by stepsToMermaid and parseApexToMermaid */
+const STYLE_MAP = {
+  classNode:    'fill:#312e81,stroke:#6366f1,stroke-width:3px,color:#e0e7ff,font-weight:bold',
+  intentNode:   'fill:#065f46,stroke:#10b981,stroke-width:3px,color:#a7f3d0,font-weight:bold',
+  dmlNode:      'fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca,font-weight:bold',
+  eventNode:    'fill:#4a1d96,stroke:#8b5cf6,stroke-width:2px,color:#c4b5fd,font-weight:bold',
+  callNode:     'fill:#164e63,stroke:#06b6d4,stroke-width:2px,color:#a5f3fc',
+  fallbackNode: 'fill:#1e293b,stroke:#475569,stroke-width:2px,color:#cbd5e1',
+  customNode:   'fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#c7d2fe,stroke-dasharray:5 3',
+  endNode:      'fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#a7f3d0',
+};
+
+/**
+ * stepsToMermaid(steps)
+ *
+ * Converts a Step array into a Mermaid TD graph string.
+ * Filters out hidden steps. Produces edges between consecutive visible steps.
+ *
+ * @param {Array} steps — Step objects (from parseApexToSteps or user-modified)
+ * @returns {string} Mermaid diagram code
+ */
+export function stepsToMermaid(steps) {
+  if (!steps || steps.length === 0) return '';
+
+  const visible = steps.filter(s => !s.hidden);
+  if (visible.length === 0) return '';
+
+  const out = ['graph TD', ''];
+  const styleGroups = {};
+
+  for (let i = 0; i < visible.length; i++) {
+    const step = visible[i];
+    const s = safe(step.label);
+
+    const shapes = {
+      stadium:  `${step.id}(["${s}"])`,
+      rect:     `${step.id}["${s}"]`,
+      rounded:  `${step.id}("${s}")`,
+      circle:   `${step.id}(("${s}"))`,
+      hexagon:  `${step.id}{{"${s}"}}`,
+      subrect:  `${step.id}[["${s}"]]`,
+    };
+
+    out.push(`    ${shapes[step.shape] || shapes.rect}`);
+
+    if (i > 0) {
+      out.push(`    ${visible[i - 1].id} --> ${step.id}`);
+    }
+
+    if (!styleGroups[step.style]) styleGroups[step.style] = [];
+    styleGroups[step.style].push(step.id);
+  }
 
   out.push('');
   Object.entries(styleGroups).forEach(([s, ids]) => {
-    if (styleMap[s]) out.push(`  classDef ${s} ${styleMap[s]}`);
+    if (STYLE_MAP[s]) out.push(`  classDef ${s} ${STYLE_MAP[s]}`);
   });
   out.push('');
   Object.entries(styleGroups).forEach(([s, ids]) => {
-    if (styleMap[s] && ids.length > 0) out.push(`  class ${ids.join(',')} ${s}`);
+    if (STYLE_MAP[s] && ids.length > 0) out.push(`  class ${ids.join(',')} ${s}`);
   });
 
   return out.join('\n');
 }
 
+
+// ─── Convenience wrapper (backward compat with v5 API) ──────────────────────
+
 /**
- * Returns the node map from the most recent parse.
- * Used by the UI for click-to-rename.
- * We re-parse to extract it (cheap since it's all regex).
+ * parseApexToMermaid(apexCode, overrides?, customSteps?)
+ *
+ * Wraps parseApexToSteps + stepsToMermaid for backward compatibility.
+ * New code should use the Step array directly.
  */
-export function getNodeMap(apexCode, overrides = {}) {
-  if (!apexCode || !apexCode.trim()) return {};
+export function parseApexToMermaid(apexCode, overrides = {}, customSteps = []) {
+  let steps = parseApexToSteps(apexCode);
+  if (steps.length === 0) return '';
 
-  const nodeMap = {};
-  let nid = 0;
-  function id() { return `n${++nid}`; }
-
-  const classMatch = apexCode.match(RE.classDecl);
-  const className = classMatch ? classMatch[1] : 'ApexClass';
-
-  const methods = [];
-  const methodRegex = new RegExp(RE.methodDecl.source, 'g');
-  let mm;
-  while ((mm = methodRegex.exec(apexCode)) !== null) {
-    const name = mm[1];
-    if (name === className) continue;
-    const body = extractMethodBody(apexCode, mm.index);
-    if (body) methods.push({ name, body, params: mm[2] || '' });
-  }
-
-  // Title node
-  const titleId = id();
-  nodeMap[titleId] = { label: overrides[titleId] || humanize(className), type: 'classNode', editable: false };
-
-  methods.forEach((method) => {
-    const milestones = extractMilestones(method.name, method.body, method.params);
-    for (const ms of milestones) {
-      const nId = id();
-      nodeMap[nId] = {
-        label: overrides[nId] || ms.label,
-        type: ms.type === 'intent' ? 'intentNode' : ms.type,
-        editable: true,
-      };
-    }
+  // Apply overrides (rename / hide)
+  steps = steps.map(s => {
+    if (overrides[s.id] === '__HIDDEN__') return { ...s, hidden: true };
+    if (overrides[s.id]) return { ...s, label: overrides[s.id] };
+    return s;
   });
 
-  // End node
-  const endId = id();
-  nodeMap[endId] = { label: 'Done', type: 'endNode', editable: false };
+  // Insert custom steps before Done
+  if (customSteps.length > 0) {
+    const endIdx = steps.findIndex(s => s.type === 'end');
+    const insertAt = endIdx >= 0 ? endIdx : steps.length;
+    const customs = customSteps.map((cs, i) => ({
+      id: `c${100 + i}`,
+      label: typeof cs === 'string' ? cs : (cs && cs.label ? cs.label : 'Custom Step'),
+      type: 'custom',
+      shape: 'rounded',
+      style: 'customNode',
+      source: 'custom',
+      editable: true,
+      hidden: false,
+    }));
+    steps.splice(insertAt, 0, ...customs);
+  }
 
+  return stepsToMermaid(steps);
+}
+
+
+// ─── Node map (backward compat) ─────────────────────────────────────────────
+
+export function getNodeMap(apexCode, overrides = {}) {
+  const steps = parseApexToSteps(apexCode);
+  const nodeMap = {};
+  for (const step of steps) {
+    nodeMap[step.id] = {
+      label: overrides[step.id] || step.label,
+      type: step.style,
+      editable: step.editable,
+    };
+  }
   return nodeMap;
 }
 
