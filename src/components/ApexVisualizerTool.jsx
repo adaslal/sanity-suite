@@ -32,16 +32,18 @@ async function ensureMermaid() {
       textColor: '#e2e8f0',
       mainBkg: '#1a1a24',
       nodeBorder: '#6366f1',
-      clusterBkg: '#0a0a0f',
-      titleColor: '#ededed',
+      clusterBkg: '#111118',
+      clusterBorder: '#2a2a3a',
+      titleColor: '#a5b4fc',
       edgeLabelBackground: '#111118',
     },
     flowchart: {
-      htmlLabels: false,
+      htmlLabels: true,
       curve: 'basis',
       rankSpacing: 60,
       nodeSpacing: 40,
       padding: 20,
+      wrappingWidth: 200,
     },
     securityLevel: 'loose',
   });
@@ -161,48 +163,48 @@ export default function ApexVisualizerTool() {
     URL.revokeObjectURL(url);
   }
 
-  // ── Download PNG ──
-  function handleDownloadPng() {
-    if (!svgContent) return;
+  // ── Download PNG (uses rendered DOM → canvas capture) ──
+  async function handleDownloadPng() {
+    const el = containerRef.current;
+    if (!el) return;
 
-    // Parse SVG and prepare a clean version for canvas rendering
-    const parser = new DOMParser();
-    const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml');
-    const svgEl = svgDoc.querySelector('svg');
+    const svgEl = el.querySelector('svg');
     if (!svgEl) return;
 
-    // Ensure SVG has explicit xmlns for standalone rendering
-    svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    svgEl.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    // Clone the SVG and inline all computed styles so it renders standalone
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('xmlns:xhtml', 'http://www.w3.org/1999/xhtml');
 
-    // Remove any foreignObject elements (they taint the canvas)
-    svgEl.querySelectorAll('foreignObject').forEach(fo => {
-      const text = fo.textContent || '';
-      const parent = fo.parentNode;
-      if (parent && text.trim()) {
-        const svgText = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'text');
-        svgText.setAttribute('fill', '#e2e8f0');
-        svgText.setAttribute('font-size', '14');
-        svgText.setAttribute('font-family', 'sans-serif');
-        svgText.textContent = text.trim().slice(0, 40);
-        parent.appendChild(svgText);
+    // Inline computed styles on every element for standalone rendering
+    const allOriginal = svgEl.querySelectorAll('*');
+    const allCloned = clone.querySelectorAll('*');
+    for (let i = 0; i < allOriginal.length; i++) {
+      const computed = window.getComputedStyle(allOriginal[i]);
+      const important = ['fill', 'stroke', 'stroke-width', 'color', 'font-size',
+        'font-family', 'font-weight', 'opacity', 'transform', 'display',
+        'text-anchor', 'dominant-baseline', 'background', 'background-color',
+        'border', 'border-radius', 'padding', 'margin', 'line-height',
+        'width', 'height', 'overflow', 'white-space', 'word-wrap'];
+      let styleStr = '';
+      for (const prop of important) {
+        const val = computed.getPropertyValue(prop);
+        if (val) styleStr += `${prop}:${val};`;
       }
-      fo.remove();
-    });
-
-    const scale = 2;
-    const vb = svgEl.getAttribute('viewBox');
-    let width = parseFloat(svgEl.getAttribute('width')) || 800;
-    let height = parseFloat(svgEl.getAttribute('height')) || 600;
-    if (vb) {
-      const parts = vb.split(/[\s,]+/);
-      width = parseFloat(parts[2]) || width;
-      height = parseFloat(parts[3]) || height;
+      if (styleStr) {
+        allCloned[i].setAttribute('style',
+          (allCloned[i].getAttribute('style') || '') + styleStr
+        );
+      }
     }
 
-    // Serialize the cleaned SVG
     const serializer = new XMLSerializer();
-    const cleanSvgStr = serializer.serializeToString(svgEl);
+    const svgStr = serializer.serializeToString(clone);
+
+    const scale = 2;
+    const bbox = svgEl.getBoundingClientRect();
+    const width = bbox.width || 800;
+    const height = bbox.height || 600;
 
     const canvas = document.createElement('canvas');
     canvas.width = width * scale;
@@ -212,32 +214,35 @@ export default function ApexVisualizerTool() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const img = new Image();
-    // Use data URI to avoid cross-origin tainting
-    const svgB64 = btoa(unescape(encodeURIComponent(cleanSvgStr)));
-    const dataUri = `data:image/svg+xml;base64,${svgB64}`;
+    const svgB64 = btoa(unescape(encodeURIComponent(svgStr)));
 
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        if (!blob) return;
-        const pngUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = pngUrl;
-        a.download = `${stats?.className || 'apex'}-flowchart.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(pngUrl);
-      }, 'image/png');
-    };
+    return new Promise((resolve) => {
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${stats?.className || 'apex'}-flowchart.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
+          resolve();
+        }, 'image/png');
+      };
 
-    img.onerror = () => {
-      // Fallback: open SVG in new tab for manual save
-      const blob = new Blob([cleanSvgStr], { type: 'image/svg+xml' });
-      window.open(URL.createObjectURL(blob), '_blank');
-    };
+      img.onerror = () => {
+        // Fallback: open SVG in new tab
+        const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+        window.open(URL.createObjectURL(blob), '_blank');
+        resolve();
+      };
 
-    img.src = dataUri;
+      img.src = `data:image/svg+xml;base64,${svgB64}`;
+    });
   }
 
   // ── Copy Mermaid code ──

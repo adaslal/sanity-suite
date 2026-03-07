@@ -80,7 +80,7 @@ export const SAMPLE_APEX = `public with sharing class OpportunityCloseHandler {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function sanitize(text) {
+function sanitize(text, maxLen = 35) {
   return text
     .replace(/"/g, '#quot;')
     .replace(/[<>]/g, '')
@@ -88,7 +88,7 @@ function sanitize(text) {
     .replace(/[{}[\]()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 50);
+    .slice(0, maxLen);
 }
 
 /** Is this condition just a null/empty/size guard? */
@@ -248,7 +248,7 @@ export function parseApexToMermaid(apexCode) {
     const sgId = `sg_${method.name}`;
     const paramHint = method.params ? `${method.params}` : '';
 
-    out.push(`  subgraph ${sgId}["${sanitize(method.name)}(${sanitize(paramHint)})"]`);
+    out.push(`  subgraph ${sgId}["${sanitize(method.name, 25)}"]`);
     out.push(`    direction TB`);
 
     const startId = id();
@@ -281,7 +281,8 @@ export function parseApexToMermaid(apexCode) {
     }
     if (initLines.length > 1) {
       const initId = id();
-      const label = `Init: ${initLines.slice(0, 4).join(', ')}${initLines.length > 4 ? '...' : ''}`;
+      const shortNames = initLines.slice(0, 3).map(n => n.slice(0, 12));
+      const label = `Init: ${shortNames.join(', ')}${initLines.length > 3 ? ' +more' : ''}`;
       node(initId, 'rect', label, 'actionNode');
       edge(prevId, initId);
       prevId = initId;
@@ -294,7 +295,7 @@ export function parseApexToMermaid(apexCode) {
       const varName = fm[1];
       const collection = fm[2].trim().split(/\s/).pop().replace(/[()]/g, '');
       const loopId = id();
-      node(loopId, 'stadium', `Loop: ${varName} in ${sanitize(collection)}`, 'loopNode');
+      node(loopId, 'stadium', `Loop: ${varName}`, 'loopNode');
       edge(prevId, loopId);
       prevId = loopId;
     }
@@ -309,7 +310,7 @@ export function parseApexToMermaid(apexCode) {
       if (isGuardCondition(rawCond)) {
         // Render as compact guard node
         const guardId = id();
-        node(guardId, 'guard', `Guard: ${condText.slice(0, 35)}`, 'guardNode');
+        node(guardId, 'guard', `Guard: ${condText.slice(0, 25)}`, 'guardNode');
         edge(prevId, guardId);
 
         // Check for throw inside the guard block
@@ -325,7 +326,7 @@ export function parseApexToMermaid(apexCode) {
       } else {
         // Full decision diamond
         const decId = id();
-        node(decId, 'diamond', condText.slice(0, 40), 'decisionNode');
+        node(decId, 'diamond', condText.slice(0, 30), 'decisionNode');
         edge(prevId, decId);
 
         // Check for throw
@@ -385,7 +386,8 @@ export function parseApexToMermaid(apexCode) {
       seenCalls.add(key);
 
       const callId = id();
-      node(callId, 'rect', `${obj}.${meth}`, 'callNode');
+      const callLabel = `${obj.slice(0,15)}.${meth.slice(0,12)}`;
+      node(callId, 'rect', callLabel, 'callNode');
       edge(prevId, callId);
       prevId = callId;
     }
