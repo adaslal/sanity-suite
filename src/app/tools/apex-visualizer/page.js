@@ -3,23 +3,23 @@ import Footer from '@/components/Footer';
 import ApexVisualizerTool from '@/components/ApexVisualizerTool';
 
 export const metadata = {
-  title: 'Free Apex Visualizer — Paste Apex, See the Flowchart | Sanity Suite',
+  title: 'Free Apex Visualizer — See What Your Code Actually Does | Sanity Suite',
   description:
-    'Paste any Salesforce Apex class and instantly see its control flow as an interactive flowchart. Free, no login, 100% client-side. Download as PNG or SVG.',
+    'Paste any Salesforce Apex class and see its Business Process Map — the story of what your code does, not how it\'s written. Compare versions, catch anti-patterns. Free, no login, 100% client-side.',
   keywords: [
     'Apex Visualizer',
     'Salesforce Apex',
     'Apex Flowchart',
-    'Apex Control Flow',
+    'Apex Business Process Map',
     'Salesforce Developer Tool',
     'Free Salesforce Tool',
-    'Mermaid.js',
-    'Apex Class Diagram',
+    'Apex Code Review',
+    'Apex Anti-Pattern Detection',
   ],
   openGraph: {
-    title: 'Free Apex Visualizer — Paste Apex, See the Flowchart',
+    title: 'Free Apex Visualizer — See What Your Code Actually Does',
     description:
-      'Visualize any Apex class as an interactive flowchart. Free, no login, runs in your browser. Built by the makers of Sanity Suite.',
+      'Paste any Apex class and see its Business Process Map. Compare versions, catch anti-patterns. Free, no login, 100% client-side.',
     url: 'https://sanity-suite.vercel.app/tools/apex-visualizer',
     siteName: 'Sanity Suite',
     type: 'website',
