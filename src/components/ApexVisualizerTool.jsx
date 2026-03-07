@@ -37,11 +37,11 @@ async function ensureMermaid() {
       edgeLabelBackground: '#111118',
     },
     flowchart: {
-      htmlLabels: true,
+      htmlLabels: false,
       curve: 'basis',
-      rankSpacing: 50,
-      nodeSpacing: 30,
-      padding: 15,
+      rankSpacing: 60,
+      nodeSpacing: 40,
+      padding: 20,
     },
     securityLevel: 'loose',
   });
@@ -164,10 +164,31 @@ export default function ApexVisualizerTool() {
   // ── Download PNG ──
   function handleDownloadPng() {
     if (!svgContent) return;
+
+    // Parse SVG and prepare a clean version for canvas rendering
     const parser = new DOMParser();
     const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml');
     const svgEl = svgDoc.querySelector('svg');
     if (!svgEl) return;
+
+    // Ensure SVG has explicit xmlns for standalone rendering
+    svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgEl.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+
+    // Remove any foreignObject elements (they taint the canvas)
+    svgEl.querySelectorAll('foreignObject').forEach(fo => {
+      const text = fo.textContent || '';
+      const parent = fo.parentNode;
+      if (parent && text.trim()) {
+        const svgText = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'text');
+        svgText.setAttribute('fill', '#e2e8f0');
+        svgText.setAttribute('font-size', '14');
+        svgText.setAttribute('font-family', 'sans-serif');
+        svgText.textContent = text.trim().slice(0, 40);
+        parent.appendChild(svgText);
+      }
+      fo.remove();
+    });
 
     const scale = 2;
     const vb = svgEl.getAttribute('viewBox');
@@ -179,6 +200,10 @@ export default function ApexVisualizerTool() {
       height = parseFloat(parts[3]) || height;
     }
 
+    // Serialize the cleaned SVG
+    const serializer = new XMLSerializer();
+    const cleanSvgStr = serializer.serializeToString(svgEl);
+
     const canvas = document.createElement('canvas');
     canvas.width = width * scale;
     canvas.height = height * scale;
@@ -187,12 +212,12 @@ export default function ApexVisualizerTool() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const img = new Image();
-    const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
+    // Use data URI to avoid cross-origin tainting
+    const svgB64 = btoa(unescape(encodeURIComponent(cleanSvgStr)));
+    const dataUri = `data:image/svg+xml;base64,${svgB64}`;
 
     img.onload = () => {
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
       canvas.toBlob((blob) => {
         if (!blob) return;
         const pngUrl = URL.createObjectURL(blob);
@@ -205,7 +230,14 @@ export default function ApexVisualizerTool() {
         URL.revokeObjectURL(pngUrl);
       }, 'image/png');
     };
-    img.src = url;
+
+    img.onerror = () => {
+      // Fallback: open SVG in new tab for manual save
+      const blob = new Blob([cleanSvgStr], { type: 'image/svg+xml' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    };
+
+    img.src = dataUri;
   }
 
   // ── Copy Mermaid code ──
