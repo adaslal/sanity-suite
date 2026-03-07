@@ -1,14 +1,16 @@
 /**
- * ApexParser v2 — Surgical Grouping Edition
+ * ApexParser v3 — Functional Logic Summary
  *
- * Converts Apex source code into Mermaid.js flowchart syntax with:
- *   - Subgraphs per method (contained, readable)
- *   - Guard nodes for simple null/empty checks (compact)
- *   - Grouped assignment blocks (no 10 separate boxes)
- *   - High-contrast DML/SOQL nodes
- *   - Semantic flow: queries → guards → loops → logic → DML → calls → end
+ * Philosophy: Tell the STORY of what the code does, not trace every line.
  *
- * 100% client-side. No dependencies beyond this file.
+ * Rules:
+ *   1. IGNORE structural noise: assignments, null checks, loops, variable declarations
+ *   2. ACTION-ORIENTED nodes only: DML, SOQL, method calls, platform events
+ *   3. STORY flow: linear sequence of major side effects
+ *   4. DECISIONS only when an if-block contains DML/SOQL inside (a real branch)
+ *   5. HUMANIZED labels: camelCase → Title Case, DML → "Create/Update [Object]"
+ *
+ * 100% client-side. No dependencies.
  */
 
 // ─── Sample Apex ─────────────────────────────────────────────────────────────
@@ -78,64 +80,76 @@ export const SAMPLE_APEX = `public with sharing class OpportunityCloseHandler {
 }`;
 
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Humanizer: camelCase / PascalCase → Title Case ──────────────────────────
 
-function sanitize(text, maxLen = 35) {
+function humanize(name) {
+  if (!name) return '';
+  // Strip Salesforce suffixes FIRST (before splitting)
+  let cleaned = name
+    .replace(/__e$/i, '_Event')
+    .replace(/__c$/i, '')
+    .replace(/__r$/i, '');
+  return cleaned
+    // Insert space before capitals in camelCase: "createAssets" → "create Assets"
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    // Insert space before sequences like "ID" after lowercase
+    .replace(/([a-z])([A-Z]{2,})/g, '$1 $2')
+    // Title-case each word
+    .split(/[\s_]+/)
+    .filter(w => w.length > 0)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+    .trim();
+}
+
+/** Clean an sObject name for display */
+function cleanObject(name) {
+  if (!name) return 'Records';
+  return humanize(name).replace(/ Event$/, '');
+}
+
+/** Mermaid-safe label */
+function safe(text, maxLen = 40) {
   return text
-    .replace(/"/g, '#quot;')
-    .replace(/[<>]/g, '')
+    .replace(/"/g, "'")
+    .replace(/[<>{}[\]()]/g, '')
     .replace(/\|/g, '/')
-    .replace(/[{}[\]()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLen);
 }
 
-/** Is this condition just a null/empty/size guard? */
-function isGuardCondition(cond) {
-  // Strip parens and whitespace for easier matching
-  const c = cond.trim().toLowerCase().replace(/\(\)/g, '').replace(/\s+/g, ' ');
 
-  // Single null check:  x == null  or  x != null
-  if (/^!?\w+(\.\w+)*\s*[!=]=\s*null$/.test(c)) return true;
+// ─── Extract method body by brace-matching ───────────────────────────────────
 
-  // Single isEmpty:  x.isEmpty  or  !x.isEmpty
-  if (/^!?\w+(\.\w+)*\.isempty$/.test(c)) return true;
-
-  // Single isSuccess / isBlank / isNotBlank
-  if (/^!?\w+(\.\w+)*\.(issuccess|isblank|isnotblank)$/.test(c)) return true;
-
-  // Single size check:  x.size > 0
-  if (/^!?\w+(\.\w+)*\.size\s*[><=!]+\s*\d+$/.test(c)) return true;
-
-  // Compound null + isEmpty:  x == null || x.isEmpty
-  if (/^!?\w+(\.\w+)*\s*[!=]=\s*null\s*(\|\||&&)\s*!?\w+(\.\w+)*\.isempty$/.test(c)) return true;
-
-  // Compound null + comparison:  x == null || x <= 0
-  if (/^!?\w+(\.\w+)*\s*[!=]=\s*null\s*(\|\||&&)\s*!?\w+(\.\w+)*\s*[><=!]+\s*\d+$/.test(c)) return true;
-
-  return false;
-}
-
-/** Extract method body by brace-matching from a starting index */
 function extractMethodBody(code, startIdx) {
-  let braceCount = 0;
-  let bodyStart = -1;
-  let bodyEnd = -1;
+  let braceCount = 0, bodyStart = -1, bodyEnd = -1;
   for (let i = startIdx; i < code.length; i++) {
-    if (code[i] === '{') {
-      if (bodyStart === -1) bodyStart = i;
-      braceCount++;
-    } else if (code[i] === '}') {
-      braceCount--;
-      if (braceCount === 0) {
-        bodyEnd = i;
-        break;
-      }
-    }
+    if (code[i] === '{') { if (bodyStart === -1) bodyStart = i; braceCount++; }
+    else if (code[i] === '}') { braceCount--; if (braceCount === 0) { bodyEnd = i; break; } }
   }
   if (bodyStart === -1 || bodyEnd === -1) return null;
   return code.slice(bodyStart + 1, bodyEnd);
+}
+
+/** Check if an if-block body contains a DML/SOQL/event (a "major branch") */
+function hasSideEffect(block) {
+  return /\b(insert|update|delete|upsert)\s+\w/i.test(block)
+    || /\[\s*SELECT/i.test(block)
+    || /EventBus\.publish/i.test(block)
+    || /Database\.(insert|update|delete|upsert)/i.test(block);
+}
+
+/** Extract the if-block body (brace-matched) starting from the if's position */
+function extractIfBody(code, ifIdx) {
+  const braceStart = code.indexOf('{', ifIdx);
+  if (braceStart === -1) return '';
+  let depth = 0;
+  for (let i = braceStart; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') { depth--; if (depth === 0) return code.slice(braceStart + 1, i); }
+  }
+  return '';
 }
 
 
@@ -144,16 +158,12 @@ function extractMethodBody(code, startIdx) {
 const RE = {
   classDecl: /(?:public|private|global)\s+(?:with\s+sharing\s+|without\s+sharing\s+|inherited\s+sharing\s+)?(?:virtual\s+|abstract\s+)?class\s+(\w+)/,
   methodDecl: /(?:public|private|protected|global)\s+(?:static\s+)?(?:(?:void|String|Integer|Boolean|Decimal|Double|Long|Id|Date|DateTime|Time|Blob|List|Set|Map|SObject|\w+)\s*(?:<[^>]+>)?)\s+(\w+)\s*\(([^)]*)\)/g,
-  soqlQuery: /\[\s*SELECT\s+[\s\S]*?FROM\s+(\w+)[\s\S]*?\]/gi,
-  forLoop: /\bfor\s*\(\s*\w+(?:\s*<[^>]+>)?\s+(\w+)\s*:\s*([^)]+)\)/g,
-  ifBlock: /\bif\s*\(([^{]+?)\)\s*\{/g,
-  throwStmt: /\bthrow\s+new\s+(\w+)\s*\(/g,
-  dmlOps: /\b(insert|update|delete|upsert)\s+(\w+)/g,
-  databaseOp: /\bDatabase\.(insert|update|delete|upsert)\s*\(/g,
+  soqlQuery: /\[\s*SELECT\s+[\s\S]*?\]/gi,
+  dmlOps: /\b(insert|update|delete|upsert)\s+(\w+)/gi,
+  databaseOp: /\bDatabase\.(insert|update|delete|upsert)\s*\(/gi,
   eventPublish: /EventBus\.publish\s*\(/g,
   methodCall: /(\w+)\.(\w+)\s*\(/g,
-  assignment: /^\s*(\w+(?:__\w)?)\s+\w+\s*=\s*/,
-  listInit: /^\s*(?:List|Set|Map)<[^>]+>\s+(\w+)\s*=\s*new\s/,
+  ifBlock: /\bif\s*\(([^{]+?)\)\s*\{/g,
 };
 
 const FRAMEWORK_OBJECTS = new Set([
@@ -167,31 +177,32 @@ const COLLECTION_METHODS = new Set([
   'add', 'put', 'get', 'size', 'isEmpty', 'values',
   'keySet', 'contains', 'containsKey', 'isSuccess',
   'getErrors', 'debug', 'remove', 'clear', 'addAll',
-  'sort', 'clone',
+  'sort', 'clone', 'toString',
 ]);
 
+const DML_VERBS = { insert: 'Create', update: 'Update', delete: 'Delete', upsert: 'Upsert' };
 
-// ─── Main parser ─────────────────────────────────────────────────────────────
+
+// ─── Main parser: Functional Logic Summary ───────────────────────────────────
 
 export function parseApexToMermaid(apexCode) {
   if (!apexCode || !apexCode.trim()) return '';
 
-  const out = [];        // output lines
-  const styleGroups = {}; // styleName -> [nodeId, ...]
+  const out = [];
+  const styleGroups = {};
   let nid = 0;
 
   function id() { return `n${++nid}`; }
 
   function node(nodeId, shape, label, style) {
-    const safe = sanitize(label);
+    const s = safe(label);
     const shapes = {
-      stadium:  `${nodeId}(["${safe}"])`,
-      rect:     `${nodeId}["${safe}"]`,
-      diamond:  `${nodeId}{"${safe}"}`,
-      pill:     `${nodeId}(["${safe}"])`,
-      circle:   `${nodeId}(("${safe}"))`,
-      subrect:  `${nodeId}[["${safe}"]]`,
-      guard:    `${nodeId}(["${safe}"])`,   // small guard — styled differently
+      stadium:  `${nodeId}(["${s}"])`,
+      rect:     `${nodeId}["${s}"]`,
+      diamond:  `${nodeId}{"${s}"}`,
+      circle:   `${nodeId}(("${s}"))`,
+      hexagon:  `${nodeId}{{"${s}"}}`,
+      subrect:  `${nodeId}[["${s}"]]`,
     };
     out.push(`    ${shapes[shape] || shapes.rect}`);
     if (!styleGroups[style]) styleGroups[style] = [];
@@ -200,11 +211,10 @@ export function parseApexToMermaid(apexCode) {
   }
 
   function edge(from, to, label) {
-    if (label) {
-      out.push(`    ${from} -->|${sanitize(label)}| ${to}`);
-    } else {
-      out.push(`    ${from} --> ${to}`);
-    }
+    out.push(label
+      ? `    ${from} -->|${safe(label, 15)}| ${to}`
+      : `    ${from} --> ${to}`
+    );
   }
 
   // ── Extract class ──
@@ -217,195 +227,174 @@ export function parseApexToMermaid(apexCode) {
   let mm;
   while ((mm = methodRegex.exec(apexCode)) !== null) {
     const name = mm[1];
-    if (name === className) continue; // skip inner class constructors
-    const params = mm[2].trim();
+    if (name === className) continue;
     const body = extractMethodBody(apexCode, mm.index);
-    if (body) {
-      methods.push({
-        name,
-        params: params
-          ? params.split(',').map(p => p.trim().split(/\s+/).pop()).join(', ')
-          : '',
-        body,
-      });
-    }
+    if (body) methods.push({ name, body });
   }
 
   if (methods.length === 0) {
-    return `graph TD\n  n1[["${sanitize(className)}"]]\n  n2(["No methods found"])\n  n1 --> n2\n  classDef classNode fill:#312e81,stroke:#6366f1,stroke-width:2px,color:#e0e7ff\n  class n1 classNode`;
+    return `graph TD\n  n1[["${safe(humanize(className))}"]]\n  n2(["No methods found"])\n  n1 --> n2\n  classDef classNode fill:#312e81,stroke:#6366f1,stroke-width:2px,color:#e0e7ff\n  class n1 classNode`;
   }
 
-  // ── Start building diagram ──
   out.push('graph TD');
   out.push('');
 
   const classId = id();
-  node(classId, 'subrect', className, 'classNode');
+  node(classId, 'subrect', humanize(className), 'classNode');
   out.push('');
 
-  // ── Process each method as a subgraph ──
+  // ── Process each method ──
   methods.forEach((method) => {
     const sgId = `sg_${method.name}`;
-    const paramHint = method.params ? `${method.params}` : '';
-
-    out.push(`  subgraph ${sgId}["${sanitize(method.name, 25)}"]`);
+    out.push(`  subgraph ${sgId}["${safe(humanize(method.name))}"]`);
     out.push(`    direction TB`);
 
-    const startId = id();
-    node(startId, 'stadium', `Start`, 'startNode');
-
-    let prevId = startId;
+    // Collect the "story actions" for this method
+    const actions = [];
     const body = method.body;
-    const bodyLines = body.split('\n');
 
-    // ──── Phase 1: SOQL queries ────
+    // 1. SOQL queries → "Fetch [Object] Data"
     const soqlRe = new RegExp(RE.soqlQuery.source, 'gi');
     let sq;
-    const soqlNodes = [];
     while ((sq = soqlRe.exec(body)) !== null) {
-      const qId = id();
-      node(qId, 'stadium', `SOQL: ${sq[1]}`, 'queryNode');
-      edge(prevId, qId);
-      prevId = qId;
-      soqlNodes.push(qId);
+      // Extract the LAST "FROM <Object>" which is the main query object (not subqueries)
+      const fromMatches = [...sq[0].matchAll(/\bFROM\s+(\w+)/gi)];
+      const mainObj = fromMatches.length > 0 ? fromMatches[fromMatches.length - 1][1] : 'Records';
+      actions.push({ type: 'query', label: `Fetch ${cleanObject(mainObj)} Data`, pos: sq.index });
     }
 
-    // ──── Phase 2: Collection initializations (group into one block) ────
-    const initLines = [];
-    for (const line of bodyLines) {
-      const trimmed = line.trim();
-      if (RE.listInit.test(trimmed)) {
-        const m = trimmed.match(/(?:List|Set|Map)<[^>]+>\s+(\w+)/);
-        if (m) initLines.push(m[1]);
-      }
-    }
-    if (initLines.length > 1) {
-      const initId = id();
-      const shortNames = initLines.slice(0, 3).map(n => n.slice(0, 12));
-      const label = `Init: ${shortNames.join(', ')}${initLines.length > 3 ? ' +more' : ''}`;
-      node(initId, 'rect', label, 'actionNode');
-      edge(prevId, initId);
-      prevId = initId;
-    }
-
-    // ──── Phase 3: For loops (with nested content) ────
-    const forRe = new RegExp(RE.forLoop.source, 'g');
-    let fm;
-    while ((fm = forRe.exec(body)) !== null) {
-      const varName = fm[1];
-      const collection = fm[2].trim().split(/\s/).pop().replace(/[()]/g, '');
-      const loopId = id();
-      node(loopId, 'stadium', `Loop: ${varName}`, 'loopNode');
-      edge(prevId, loopId);
-      prevId = loopId;
-    }
-
-    // ──── Phase 4: If/guard conditions ────
-    const ifRe = new RegExp(RE.ifBlock.source, 'g');
-    let ifm;
-    while ((ifm = ifRe.exec(body)) !== null) {
-      const rawCond = ifm[1].trim();
-      const condText = sanitize(rawCond);
-
-      if (isGuardCondition(rawCond)) {
-        // Render as compact guard node
-        const guardId = id();
-        node(guardId, 'guard', `Guard: ${condText.slice(0, 25)}`, 'guardNode');
-        edge(prevId, guardId);
-
-        // Check for throw inside the guard block
-        const afterIf = body.slice(ifm.index);
-        const throwMatch = afterIf.match(/\bthrow\s+new\s+(\w+)/);
-        if (throwMatch) {
-          const errId = id();
-          node(errId, 'stadium', `Throw ${throwMatch[1]}`, 'errorNode');
-          edge(guardId, errId, 'fail');
-        }
-
-        prevId = guardId;
-      } else {
-        // Full decision diamond
-        const decId = id();
-        node(decId, 'diamond', condText.slice(0, 30), 'decisionNode');
-        edge(prevId, decId);
-
-        // Check for throw
-        const afterIf = body.slice(ifm.index);
-        const throwMatch = afterIf.match(/\bthrow\s+new\s+(\w+)/);
-        if (throwMatch) {
-          const errId = id();
-          node(errId, 'stadium', `Throw ${throwMatch[1]}`, 'errorNode');
-          edge(decId, errId, 'fail');
-        }
-
-        prevId = decId;
-      }
-    }
-
-    // ──── Phase 5: DML operations (high contrast) ────
-    const dmlRe = new RegExp(RE.dmlOps.source, 'g');
+    // 2. DML operations → "Create/Update/Delete [Object]"
+    const dmlRe = new RegExp(RE.dmlOps.source, 'gi');
     let dm;
     while ((dm = dmlRe.exec(body)) !== null) {
-      const dmlId = id();
-      const op = dm[1].toUpperCase();
-      node(dmlId, 'stadium', `${op}: ${dm[2]}`, 'dmlNode');
-      edge(prevId, dmlId);
-      prevId = dmlId;
+      const verb = DML_VERBS[dm[1].toLowerCase()] || dm[1];
+      // Try to resolve the variable to its declared type
+      const varName = dm[2];
+      const typeMatch = body.match(new RegExp(`List<(\\w+(?:__\\w+)?)>\\s+${varName}\\b`));
+      const objName = typeMatch ? cleanObject(typeMatch[1]) : humanize(varName);
+      actions.push({ type: 'dml', label: `${verb} ${objName}`, pos: dm.index });
     }
 
-    const dbRe = new RegExp(RE.databaseOp.source, 'g');
+    // 2b. Database.* operations
+    const dbRe = new RegExp(RE.databaseOp.source, 'gi');
     let dbm;
     while ((dbm = dbRe.exec(body)) !== null) {
-      const dmlId = id();
-      node(dmlId, 'stadium', `Database.${dbm[1].toUpperCase()}`, 'dmlNode');
-      edge(prevId, dmlId);
-      prevId = dmlId;
+      const verb = DML_VERBS[dbm[1].toLowerCase()] || dbm[1];
+      actions.push({ type: 'dml', label: `${verb} Records`, pos: dbm.index });
     }
 
-    // ──── Phase 6: Platform Events ────
-    if (RE.eventPublish.test(body)) {
-      const evtId = id();
-      node(evtId, 'circle', 'EventBus.publish', 'eventNode');
-      edge(prevId, evtId);
-      prevId = evtId;
+    // 3. Platform Events → "Publish Events"
+    const evtRe = new RegExp(RE.eventPublish.source, 'g');
+    let ev;
+    while ((ev = evtRe.exec(body)) !== null) {
+      actions.push({ type: 'event', label: 'Publish Platform Events', pos: ev.index });
     }
 
-    // ──── Phase 7: External method calls ────
+    // 4. External method calls → humanized name
     const callRe = new RegExp(RE.methodCall.source, 'g');
     let cm;
     const seenCalls = new Set();
     while ((cm = callRe.exec(body)) !== null) {
-      const obj = cm[1];
-      const meth = cm[2];
+      const obj = cm[1], meth = cm[2];
       if (FRAMEWORK_OBJECTS.has(obj)) continue;
       if (COLLECTION_METHODS.has(meth)) continue;
-      if (/^[a-z]/.test(obj)) continue; // skip local variable calls
+      if (/^[a-z]/.test(obj)) continue;  // local variable
 
       const key = `${obj}.${meth}`;
       if (seenCalls.has(key)) continue;
       seenCalls.add(key);
 
-      const callId = id();
-      const callLabel = `${obj.slice(0,15)}.${meth.slice(0,12)}`;
-      node(callId, 'rect', callLabel, 'callNode');
-      edge(prevId, callId);
-      prevId = callId;
+      actions.push({ type: 'call', label: humanize(meth), pos: cm.index });
     }
 
-    // ──── End node ────
+    // 5. Check for meaningful if-branches (contain side effects)
+    const ifRe = new RegExp(RE.ifBlock.source, 'g');
+    let ifm;
+    while ((ifm = ifRe.exec(body)) !== null) {
+      const ifBody = extractIfBody(body, ifm.index);
+      if (hasSideEffect(ifBody)) {
+        // Only show the decision if it wraps something interesting
+        const condRaw = ifm[1].trim();
+        // Humanize the condition into a plain-English question
+        let condLabel = condRaw
+          // "!list.isEmpty()" → "Has records" (BEFORE stripping parens)
+          .replace(/!\s*[\w.]+\.isEmpty\s*\(\)/g, 'Has records')
+          // "list.isEmpty()" → "Is empty"
+          .replace(/[\w.]+\.isEmpty\s*\(\)/g, 'Is empty')
+          // "x != null" → "Has value"
+          .replace(/[\w.]+\s*!=\s*null/gi, 'Has value')
+          // "x == null" → "Is null"
+          .replace(/[\w.]+\s*==\s*null/gi, 'Is null')
+          // Strip parentheses AFTER semantic replacements
+          .replace(/[()]/g, '')
+          // "!x" → "Has value" (generic negated check)
+          .replace(/!\s*[\w.]+/g, 'Has value')
+          // Strip remaining method calls
+          .replace(/\.[\w]+/g, '')
+          .replace(/&&/g, ' and ')
+          .replace(/\|\|/g, ' or ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        condLabel = safe(condLabel, 25);
+        if (condLabel.length < 4) condLabel = 'Condition met?';
+
+        actions.push({ type: 'decision', label: condLabel, pos: ifm.index });
+      }
+    }
+
+    // Sort all actions by their position in the source code
+    actions.sort((a, b) => a.pos - b.pos);
+
+    // Deduplicate adjacent identical labels
+    const deduped = [];
+    for (const action of actions) {
+      if (deduped.length > 0 && deduped[deduped.length - 1].label === action.label) continue;
+      deduped.push(action);
+    }
+
+    // Build the flow
+    const startId = id();
+    node(startId, 'stadium', 'Start', 'startNode');
+    let prevId = startId;
+
+    const styleTypeMap = {
+      query: 'queryNode',
+      dml: 'dmlNode',
+      event: 'eventNode',
+      call: 'callNode',
+      decision: 'decisionNode',
+    };
+
+    const shapeMap = {
+      query: 'hexagon',
+      dml: 'stadium',
+      event: 'circle',
+      call: 'rect',
+      decision: 'diamond',
+    };
+
+    for (const action of deduped) {
+      const nId = id();
+      const shape = shapeMap[action.type] || 'rect';
+      const style = styleTypeMap[action.type] || 'actionNode';
+      node(nId, shape, action.label, style);
+      edge(prevId, nId);
+      prevId = nId;
+    }
+
     const endId = id();
-    node(endId, 'stadium', 'End', 'endNode');
+    node(endId, 'stadium', 'Done', 'endNode');
     edge(prevId, endId);
 
     out.push(`  end`);
     out.push('');
 
-    // Connect class to this subgraph's start
+    // Connect class → subgraph start
     edge(classId, startId);
     out.push('');
   });
 
-  // ── Style definitions ──
+  // ── Styles ──
   const styleMap = {
     classNode:    'fill:#312e81,stroke:#6366f1,stroke-width:3px,color:#e0e7ff,font-weight:bold',
     startNode:    'fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#a7f3d0',
@@ -413,25 +402,18 @@ export function parseApexToMermaid(apexCode) {
     queryNode:    'fill:#0c4a6e,stroke:#0ea5e9,stroke-width:2px,color:#7dd3fc,font-weight:bold',
     dmlNode:      'fill:#7f1d1d,stroke:#ef4444,stroke-width:3px,color:#fecaca,font-weight:bold',
     decisionNode: 'fill:#713f12,stroke:#f59e0b,stroke-width:2px,color:#fde68a',
-    guardNode:    'fill:#1e293b,stroke:#64748b,stroke-width:1px,color:#94a3b8,font-size:11px',
-    errorNode:    'fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fecaca',
-    loopNode:     'fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#d8b4fe',
     callNode:     'fill:#164e63,stroke:#06b6d4,stroke-width:2px,color:#a5f3fc',
     eventNode:    'fill:#4a1d96,stroke:#8b5cf6,stroke-width:2px,color:#c4b5fd',
     actionNode:   'fill:#1e293b,stroke:#334155,stroke-width:1px,color:#94a3b8',
   };
 
   out.push('');
-  Object.entries(styleGroups).forEach(([style, ids]) => {
-    if (styleMap[style]) {
-      out.push(`  classDef ${style} ${styleMap[style]}`);
-    }
+  Object.entries(styleGroups).forEach(([s, ids]) => {
+    if (styleMap[s]) out.push(`  classDef ${s} ${styleMap[s]}`);
   });
   out.push('');
-  Object.entries(styleGroups).forEach(([style, ids]) => {
-    if (styleMap[style] && ids.length > 0) {
-      out.push(`  class ${ids.join(',')} ${style}`);
-    }
+  Object.entries(styleGroups).forEach(([s, ids]) => {
+    if (styleMap[s] && ids.length > 0) out.push(`  class ${ids.join(',')} ${s}`);
   });
 
   return out.join('\n');
