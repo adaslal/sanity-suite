@@ -1,14 +1,16 @@
 'use client';
 /**
- * ApexVisualizerTool v6 — Business Logic IDE
+ * CodeVisualizerTool v7 — Multi-Language Business Logic IDE
  *
- * New in v6:
- *   - Step-array architecture: flowchart is a manipulable array of Step objects
- *   - Mid-flow insertion: hover connector lines → glowing "+" button → insert anywhere
- *   - All v5 features: @intent, rename, hide, compare, sanity checks, watermark
+ * New in v7:
+ *   - Multi-language support: Apex, JavaScript/React, Java, C#/.NET
+ *   - Auto-detection with manual override
+ *   - Language-specific sample code and stats
+ *   - All v6 features: Step-array, mid-flow insertion, rename, hide, compare, sanity checks
  */
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
-import { parseApexToSteps, stepsToMermaid, getApexStats, SAMPLE_APEX } from '@/lib/apexParser';
+import { stepsToMermaid } from '@/lib/apexParser';
+import { parseToSteps, getStats, getSample, detectLanguage, LANGUAGES, LANGUAGE_LIST } from '@/lib/parsers/parserBase';
 import { runSanityChecks } from '@/lib/sanityChecks';
 
 // ─── Mermaid initialisation (client-side only) ───────────────────────────────
@@ -245,8 +247,10 @@ function SanityCheckSidebar({ findings, isVisible }) {
 
 // ─── Code Editor Panel ──────────────────────────────────────────────────────
 
-function CodePanel({ value, onChange, label, placeholder, stats }) {
+function CodePanel({ value, onChange, label, placeholder, stats, language }) {
   const lineCount = (value || '').split('\n').length;
+  const EXT_MAP = { apex: '.cls', javascript: '.js', java: '.java', csharp: '.cs' };
+  const ext = EXT_MAP[language] || '';
   return (
     <div className="flex flex-col rounded-xl border border-border bg-surface overflow-hidden h-full">
       <div className="flex items-center justify-between border-b border-border/50 px-4 py-2.5">
@@ -257,7 +261,7 @@ function CodePanel({ value, onChange, label, placeholder, stats }) {
             <span className="h-3 w-3 rounded-full bg-green-500/60" />
           </div>
           <span className="ml-2 text-xs font-medium text-muted">
-            {stats?.className ? `${stats.className}.cls` : label}
+            {stats?.className ? `${stats.className}${ext}` : label}
           </span>
         </div>
         <span className="text-[10px] text-muted/60">{lineCount} lines</span>
@@ -405,8 +409,12 @@ export default function ApexVisualizerTool() {
   // ── Mode ──
   const [mode, setMode] = useState('single');
 
+  // ── Language state (v7) ──
+  const [language, setLanguage] = useState('apex');
+  const [autoDetected, setAutoDetected] = useState(false);
+
   // ── Step-array state (core of v6) ──
-  const [apexCode, setApexCode] = useState('');
+  const [code, setCode] = useState('');
   const [steps, setSteps] = useState([]);
   const machineStepsRef = useRef([]);
   const customIdRef = useRef(0);
@@ -464,10 +472,10 @@ export default function ApexVisualizerTool() {
   // EFFECTS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // ── 1. Parse code → Steps (fires when apexCode changes) ──
+  // ── 1. Parse code → Steps (fires when code or language changes) ──
   useEffect(() => {
     if (mode !== 'single') return;
-    const trimmed = (apexCode || '').trim();
+    const trimmed = (code || '').trim();
     if (!trimmed) {
       setSteps([]);
       machineStepsRef.current = [];
@@ -479,13 +487,14 @@ export default function ApexVisualizerTool() {
       setInsertionPoints([]);
       return;
     }
-    const newSteps = parseApexToSteps(trimmed);
+    const { steps: newSteps } = parseToSteps(trimmed, language);
     machineStepsRef.current = JSON.parse(JSON.stringify(newSteps));
     setSteps(JSON.parse(JSON.stringify(newSteps)));
-    setStats(getApexStats(trimmed));
-    setFindings(runSanityChecks(trimmed));
+    setStats(getStats(trimmed, language));
+    // Sanity checks are Apex-specific for now; run them only for Apex
+    setFindings(language === 'apex' ? runSanityChecks(trimmed) : []);
     customIdRef.current = 0;
-  }, [apexCode, mode]);
+  }, [code, language, mode]);
 
   // ── 2. Steps → Mermaid → SVG (fires when steps change) ──
   useEffect(() => {
@@ -607,10 +616,10 @@ export default function ApexVisualizerTool() {
   }, [svgContent, steps, mode]);
 
   // ── 5. Compare mode render A ──
-  const renderMermaidCompare = useCallback(async (code, graphPrefix, renderId) => {
-    const codeSteps = parseApexToSteps(code);
+  const renderMermaidCompare = useCallback(async (compareCode, graphPrefix, renderId) => {
+    const { steps: codeSteps } = parseToSteps(compareCode, language);
     const mermaid_output = stepsToMermaid(codeSteps);
-    if (!mermaid_output) return { svg: '', error: 'No Apex constructs found.' };
+    if (!mermaid_output) return { svg: '', error: 'No code constructs found.' };
     try {
       const mermaid = await ensureMermaid();
       const graphId = `${graphPrefix}_${uniqueId}_${renderId}`;
@@ -707,16 +716,40 @@ export default function ApexVisualizerTool() {
   }
 
   // ── Load / Clear ──
-  function handleLoadSample() { setApexCode(SAMPLE_APEX); }
-  function handleClear() { setApexCode(''); }
+  function handleLoadSample() { setCode(getSample(language)); }
+  function handleClear() { setCode(''); }
+
+  // ── Language change handler ──
+  function handleLanguageChange(newLang) {
+    setLanguage(newLang);
+    setAutoDetected(false);
+    // If the code area is empty or has the old sample, load the new sample
+    const currentSample = getSample(language);
+    if (!code.trim() || code.trim() === currentSample.trim()) {
+      setCode(getSample(newLang));
+    }
+  }
+
+  // ── Auto-detect language from pasted code ──
+  function handleCodeChange(newCode) {
+    setCode(newCode);
+    // Auto-detect on paste (when content changes significantly)
+    if (newCode.trim().length > 30 && !autoDetected) {
+      const { language: detected, confidence } = detectLanguage(newCode);
+      if (confidence > 0.4 && detected !== language) {
+        setLanguage(detected);
+        setAutoDetected(true);
+      }
+    }
+  }
 
   // ── Mode switch ──
   function handleSwitchMode(newMode) {
     if (newMode === 'compare' && mode === 'single') {
-      setCompareA(apexCode);
+      setCompareA(code);
       setCompareB('');
     } else if (newMode === 'single' && mode === 'compare') {
-      setApexCode(compareA || compareB);
+      setCode(compareA || compareB);
     }
     setMode(newMode);
   }
@@ -728,7 +761,7 @@ export default function ApexVisualizerTool() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${stats?.className || 'apex'}-flowchart.svg`;
+    a.download = `${stats?.className || language}-flowchart.svg`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -798,8 +831,9 @@ export default function ApexVisualizerTool() {
   }
 
   function handleShareLinkedIn() {
+    const langName = LANGUAGES[language]?.name || 'code';
     const text = encodeURIComponent(
-      `I just visualized my Apex class as a Business Process Map \u2014 no login, no server, 100% in-browser.\n\nPaste any Apex class and see the story of what your code does, instantly.\n\nTry it: https://sanity-suite.vercel.app/tools/apex-visualizer\n\n#Salesforce #ApexDev #SalesforceDeveloper #SanitySuite`
+      `I just visualized my ${langName} code as a Business Process Map \u2014 no login, no server, 100% in-browser.\n\nPaste any code (Apex, JavaScript, Java, C#) and see the story of what your code does, instantly.\n\nTry it: https://sanity-suite.vercel.app/tools/apex-visualizer\n\n#Developer #CodeVisualization #SalesforceDeveloper #SanitySuite`
     );
     window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent('https://sanity-suite.vercel.app/tools/apex-visualizer')}&summary=${text}`, '_blank');
   }
@@ -829,11 +863,11 @@ export default function ApexVisualizerTool() {
             <span className="text-xs font-medium text-muted">Free Tool &mdash; No Login Required</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl">
-            Apex <span className="gradient-text">Visualizer</span>
+            Code <span className="gradient-text">Visualizer</span>
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-base text-muted">
-            Paste any Apex class and see its business process map &mdash; what your code
-            actually <em>does</em>, not how it&apos;s written. 100% client-side.
+            Paste any code and see its business process map &mdash; what your code
+            actually <em>does</em>, not how it&apos;s written. Supports Apex, JavaScript, Java &amp; C#. 100% client-side.
           </p>
         </div>
       </section>
@@ -856,6 +890,27 @@ export default function ApexVisualizerTool() {
               >
                 Compare
               </button>
+            </div>
+
+            <div className="mx-1 h-4 w-px bg-border" />
+
+            {/* Language selector */}
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              {LANGUAGE_LIST.map((lang) => (
+                <button
+                  key={lang.id}
+                  onClick={() => handleLanguageChange(lang.id)}
+                  className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    language === lang.id
+                      ? 'bg-accent/20 text-accent border-r border-accent/30'
+                      : 'text-muted hover:text-foreground border-r border-border last:border-r-0'
+                  }`}
+                  title={lang.description}
+                >
+                  <span className="mr-1">{lang.icon}</span>
+                  <span className="hidden sm:inline">{lang.name}</span>
+                </button>
+              ))}
             </div>
 
             <div className="mx-1 h-4 w-px bg-border" />
@@ -885,7 +940,7 @@ export default function ApexVisualizerTool() {
                 )}
                 {stats && (
                   <span className="ml-2 hidden text-xs text-muted sm:inline">
-                    {stats.className} &middot; {stats.codeLines} lines &middot; {stats.methodCount} method{stats.methodCount !== 1 ? 's' : ''}
+                    {stats.className || stats.componentName || LANGUAGES[language]?.name} &middot; {stats.codeLines} lines &middot; {stats.methodCount || stats.functionCount || 0} {language === 'javascript' ? 'function' : 'method'}{(stats.methodCount || stats.functionCount || 0) !== 1 ? 's' : ''}
                     {stats.intentCount > 0 && <> &middot; <span className="text-green-400">{stats.intentCount} @intent</span></>}
                     {customCount > 0 && <> &middot; <span className="text-purple-400">{customCount} custom</span></>}
                   </span>
@@ -977,11 +1032,12 @@ export default function ApexVisualizerTool() {
             <div className="grid gap-4 lg:grid-cols-2" style={{ minHeight: '65vh' }}>
               {/* Left: Code Editor */}
               <CodePanel
-                value={apexCode}
-                onChange={setApexCode}
-                label="Apex Class"
-                placeholder={"Paste your Apex class here...\n\nOr click 'Load Sample' to see it in action."}
+                value={code}
+                onChange={handleCodeChange}
+                label={LANGUAGES[language]?.label || 'Code'}
+                placeholder={`Paste your ${LANGUAGES[language]?.name || ''} code here...\n\nOr click 'Load Sample' to see it in action.`}
                 stats={stats}
+                language={language}
               />
 
               {/* Right: Flowchart with insertion overlay */}
@@ -1004,12 +1060,18 @@ export default function ApexVisualizerTool() {
                 <div className="lg:col-span-2 rounded-xl border border-border bg-surface p-4">
                   <div className="flex flex-wrap items-center justify-center gap-3">
                     <StatBadge label="Lines" value={stats.codeLines} color="accent" />
-                    <StatBadge label="Methods" value={stats.methodCount} color="green" />
-                    <StatBadge label="SOQL" value={stats.soqlCount} color="cyan" />
-                    <StatBadge label="DML" value={stats.dmlCount} color="purple" />
-                    <StatBadge label="Branches" value={stats.ifCount} color="amber" />
-                    <StatBadge label="Loops" value={stats.loopCount} color="purple" />
-                    {stats.eventCount > 0 && (
+                    <StatBadge label={language === 'javascript' ? 'Functions' : 'Methods'} value={stats.methodCount || stats.functionCount || 0} color="green" />
+                    {stats.soqlCount !== undefined && <StatBadge label="SOQL" value={stats.soqlCount} color="cyan" />}
+                    {stats.dmlCount !== undefined && <StatBadge label="DML" value={stats.dmlCount} color="purple" />}
+                    {stats.fetchCount !== undefined && stats.fetchCount > 0 && <StatBadge label="API Calls" value={stats.fetchCount} color="cyan" />}
+                    {stats.hookCount !== undefined && stats.hookCount > 0 && <StatBadge label="Hooks" value={stats.hookCount} color="cyan" />}
+                    {stats.jpaOpsCount !== undefined && stats.jpaOpsCount > 0 && <StatBadge label="JPA Ops" value={stats.jpaOpsCount} color="cyan" />}
+                    {stats.httpCallCount !== undefined && stats.httpCallCount > 0 && <StatBadge label="HTTP Calls" value={stats.httpCallCount} color="cyan" />}
+                    {stats.efOpsCount !== undefined && stats.efOpsCount > 0 && <StatBadge label="EF Ops" value={stats.efOpsCount} color="cyan" />}
+                    {stats.linqCount !== undefined && stats.linqCount > 0 && <StatBadge label="LINQ" value={stats.linqCount} color="cyan" />}
+                    {stats.ifCount !== undefined && <StatBadge label="Branches" value={stats.ifCount} color="amber" />}
+                    {stats.loopCount !== undefined && <StatBadge label="Loops" value={stats.loopCount} color="purple" />}
+                    {(stats.eventCount || 0) > 0 && (
                       <StatBadge label="Events" value={stats.eventCount} color="accent" />
                     )}
                     <div className="ml-2 flex flex-col items-center rounded-lg border border-accent/30 bg-accent/10 px-4 py-2">
@@ -1042,7 +1104,7 @@ export default function ApexVisualizerTool() {
           <div className="space-y-4">
             <div className="rounded-xl border border-accent/20 bg-accent/5 px-4 py-3 text-center">
               <p className="text-sm text-muted">
-                <span className="font-semibold text-accent">Compare Mode</span> &mdash; Paste two versions of your Apex class to see how the business logic changed.
+                <span className="font-semibold text-accent">Compare Mode</span> &mdash; Paste two versions of your {LANGUAGES[language]?.name || ''} code to see how the business logic changed.
               </p>
             </div>
 
@@ -1053,6 +1115,7 @@ export default function ApexVisualizerTool() {
                 label="Version A (Before)"
                 placeholder="Paste the BEFORE version here..."
                 stats={null}
+                language={language}
               />
               <CodePanel
                 value={compareB}
@@ -1060,6 +1123,7 @@ export default function ApexVisualizerTool() {
                 label="Version B (After)"
                 placeholder="Paste the AFTER version here..."
                 stats={null}
+                language={language}
               />
             </div>
 
@@ -1070,7 +1134,7 @@ export default function ApexVisualizerTool() {
                 isRendering={renderingA}
                 wrapperRef={{ current: null }}
                 svgContainerRef={containerARef}
-                onLoadSample={() => setCompareA(SAMPLE_APEX)}
+                onLoadSample={() => setCompareA(getSample(language))}
               />
               <FlowchartPanel
                 svgContent={svgB}
@@ -1078,7 +1142,7 @@ export default function ApexVisualizerTool() {
                 isRendering={renderingB}
                 wrapperRef={{ current: null }}
                 svgContainerRef={containerBRef}
-                onLoadSample={() => setCompareB(SAMPLE_APEX)}
+                onLoadSample={() => setCompareB(getSample(language))}
               />
             </div>
           </div>
@@ -1101,9 +1165,9 @@ export default function ApexVisualizerTool() {
                 <span className="gradient-text">Security Audits</span>?
               </h2>
               <p className="mx-auto mt-4 max-w-lg text-sm text-muted leading-relaxed">
-                The Sanity Suite LWC runs inside your Salesforce org &mdash; audit Flow XML,
+                The Sanity Suite runs inside your Salesforce org &mdash; audit Flow XML,
                 patch Permission Sets, extract deterministic logic hashes, and score
-                your Flow health. All client-side, zero data exposure.
+                your Flow health. Plus, visualize code in any language. All client-side, zero data exposure.
               </p>
               <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
                 <a
